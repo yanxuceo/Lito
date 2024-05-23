@@ -27,7 +27,7 @@ void init_microphone(i2s_chan_handle_t *rx_handle)
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, rx_handle));
 
     i2s_pdm_rx_config_t pdm_rx_cfg = {
-        .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(CONFIG_EXAMPLE_SAMPLE_RATE),
+        .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(44100),
         /* The default mono slot is the left slot (whose 'select pin' of the PDM microphone is pulled down) */
         .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
