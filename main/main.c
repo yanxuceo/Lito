@@ -14,12 +14,11 @@
 
 #include "config.h"
 
-
 static const char *TAG = "app";
 
 static int16_t circular_buffer[TOTAL_BUFFER_SIZE];
-static volatile int write_index = 0;  // Index where new data is written
-static volatile int read_index = 0;   // Index where data is read for writing to SD
+static volatile int write_index = 0;                // Index where new data is written
+static volatile int read_index = 0;                 // Index where data is read for writing to SD
 
 static int file_index = 0;
 i2s_chan_handle_t rx_handle = NULL;
@@ -38,16 +37,31 @@ SemaphoreHandle_t sdWriteSemaphore;
 SemaphoreHandle_t startCaptureSemaphore;
 
 
+
 float calculate_short_time_energy(int16_t *samples, size_t num_samples) {
+    if (num_samples == 0) return -INFINITY;  // Avoid division by zero and log(0)
+
     float energy = 0.0f;
+    int16_t max_amplitude = 0;
+
+    // Find the maximum amplitude to use for normalization
     for (size_t i = 0; i < num_samples; ++i) {
-        energy += samples[i] * samples[i];
+        if (abs(samples[i]) > max_amplitude) {
+            max_amplitude = abs(samples[i]);
+        }
     }
+
+    // Calculate energy, normalized by the maximum amplitude
+    for (size_t i = 0; i < num_samples; ++i) {
+        float normalized_sample = (max_amplitude != 0) ? (samples[i] / (float)max_amplitude) : 0;
+        energy += normalized_sample * normalized_sample;
+    }
+
     float rms = sqrt(energy / num_samples);
 
     // Convert RMS to decibels (dB)
     float db = 20.0 * log10(rms + 1e-6); // Adding a small value to avoid log(0)
-    return db;
+    return -db;
 }
 
 
@@ -139,20 +153,18 @@ void write_to_sd_task(void *param) {
                 float energy = calculate_short_time_energy(read_ptr, BUFFER_SIZE);
                 ESP_LOGI(TAG, "Calculated energy: %f", energy);
 
-                //if (energy >= ENERGY_THRESHOLD) {
-                    // Check if the current file size exceeds the maximum size
-                    // Write the audio data
+                // silence detection and skip saving
+                if (energy >= ENERGY_THRESHOLD) {
                     fwrite(read_ptr, sizeof(int16_t), BUFFER_SIZE, current_file);
-                  
+                
                     current_file_size += BUFFER_SIZE * sizeof(int16_t);
                     ESP_LOGI(TAG, "Written %d bytes to file", current_file_size);
+                }
 
-                    if (current_file_size >= MAX_FILE_SIZE) {
-                        ESP_LOGI(TAG, "Closing file 1");
-                        open_new_file();
-                    }
-                    
-                //}
+                if (current_file_size >= MAX_FILE_SIZE) {
+                    ESP_LOGI(TAG, "Closing file 1");
+                    open_new_file();
+                }
 
                 // Update read index after writing
                 read_index = (read_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;
@@ -181,6 +193,7 @@ void write_to_sd_task(void *param) {
 void wait_sd_init(void) {
     xSemaphoreGive(sdWriteSemaphore);
 }
+
 
 void wait_audio_to_record(void) {
     xSemaphoreGive(startCaptureSemaphore);

@@ -8,7 +8,7 @@
 #define TOTAL_BUFFER_SIZE (BUFFER_SIZE * NUM_SEGMENTS)
 
 #define FILE_EXTENSION      ".wav"
-#define ENERGY_THRESHOLD    5000       // Adjust this value based on your microphone sensitivity
+#define ENERGY_THRESHOLD    (0.5)       // Adjust this value based on your microphone sensitivity
 
 // STATUS LED GPIO 
 #define BUILTIN_LED GPIO_NUM_21
@@ -18,6 +18,7 @@
 #define MAX_PATH_LENGTH 255
 #define MAX_FILE_SIZE_MB    1                                 // Max file size in megabytes
 #define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 1024 * 1024)  // Max file size in bytes
+
 
 
 
