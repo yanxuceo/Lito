@@ -15,11 +15,14 @@
 
 
 // FILE limits
-#define MAX_PATH_LENGTH 255
+#define MAX_PATH_LENGTH     128
 #define MAX_FILE_SIZE_MB    1                                 // Max file size in megabytes
-#define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 1024 * 1024)  // Max file size in bytes
+
+//TODO: 2024.05.24 revert it
+#define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 512 * 512)   // Max file size in bytes
 
 
+#define AUDIO_DIR "/0524"
 
 
 #endif

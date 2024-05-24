@@ -65,9 +65,22 @@ float calculate_short_time_energy(int16_t *samples, size_t num_samples) {
 }
 
 
+// TODO: AUDIO_DIR should be named with current date 
 void open_new_file() {
-    char file_name[MAX_PATH_LENGTH];
-    snprintf(file_name, sizeof(file_name), "%s/%03d%s", MOUNT_POINT, file_index++, FILE_EXTENSION);
+    char dir_path[MAX_PATH_LENGTH];
+    snprintf(dir_path, sizeof(dir_path), "%s%s", MOUNT_POINT, AUDIO_DIR);
+
+    // Create the directory if it does not exist
+    struct stat st = {0};
+    if (stat(dir_path, &st) == -1) {
+        if (mkdir(dir_path, 0700) != 0) {
+            ESP_LOGE(TAG, "Failed to create directory: %s", dir_path);
+            return;
+        }
+    }
+
+    char file_name[255];
+    snprintf(file_name, sizeof(file_name), "%s/%04d%s", dir_path, file_index++, FILE_EXTENSION);
 
     if (current_file != NULL) {
         fclose(current_file);
@@ -84,7 +97,12 @@ void open_new_file() {
 
     // Write the WAV header
     wav_header_t wav_header = WAV_HEADER_PCM_DEFAULT(MAX_FILE_SIZE, 16, SAMPLE_RATE, 1);
-    fwrite(&wav_header, sizeof(wav_header), 1, current_file);
+    if (fwrite(&wav_header, sizeof(wav_header), 1, current_file) != 1) {
+        ESP_LOGE(TAG, "Failed to write WAV header to file: %s", file_name);
+        fclose(current_file);
+        current_file = NULL;
+        return;
+    }
 }
 
 

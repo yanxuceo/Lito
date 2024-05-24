@@ -11,7 +11,7 @@
 #include "esp_err.h"
 
 
-#define MOUNT_POINT "/sdcard"
+#define MOUNT_POINT "/sd"
 
 
 esp_err_t sd_card_init(void);
