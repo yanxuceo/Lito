@@ -1,9 +1,3 @@
-#include <string.h>
-#include <sys/unistd.h>
-#include <sys/stat.h>
-#include "esp_vfs_fat.h"
-#include "sdmmc_cmd.h"
-#include "esp_log.h"
 #include "sd_card.h"
 
 static const char *TAG = "sd_card";
@@ -97,4 +91,3 @@ esp_err_t sd_card_read_file(const char *path, char *buf, size_t max_len)
     ESP_LOGI(TAG, "File read");
     return ESP_OK;
 }
-

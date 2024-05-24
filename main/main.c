@@ -1,54 +1,41 @@
 #include <stdio.h>
 #include <math.h>
-#include <inttypes.h>           // Add this header for PRIu32
+#include <inttypes.h>         
+#include <sys/unistd.h>
+
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include <sys/unistd.h>
+
 #include "sd_card.h"
 #include "esp_log.h"
 #include "i2s_mic.h"
 
+#include "config.h"
 
 
 static const char *TAG = "app";
-
-#define BUFFER_SIZE     4096           // Size of each segment in the circular buffer
-#define NUM_SEGMENTS    20             // Number of segments in the circular buffer
-#define TOTAL_BUFFER_SIZE (BUFFER_SIZE * NUM_SEGMENTS)
-
-#define FILE_PREFIX         "/sdcard/record_"
-#define FILE_EXTENSION      ".wav"
-#define ENERGY_THRESHOLD    5000       // Adjust this value based on your microphone sensitivity
 
 static int16_t circular_buffer[TOTAL_BUFFER_SIZE];
 static volatile int write_index = 0;  // Index where new data is written
 static volatile int read_index = 0;   // Index where data is read for writing to SD
 
-SemaphoreHandle_t bufferReadySemaphore;
-SemaphoreHandle_t bufferEmptySemaphore;
-
 static int file_index = 0;
-
 i2s_chan_handle_t rx_handle = NULL;
-volatile bool is_recording = true;
-volatile bool stop_recording = false;  // Flag to stop recording
-
-
-#define BUILTIN_LED GPIO_NUM_21
-SemaphoreHandle_t sdCardSemaphore;
-
-SemaphoreHandle_t sdWriteSemaphore;
-SemaphoreHandle_t startCaptureSemaphore;
 
 static FILE *current_file = NULL;
 static size_t current_file_size = 0;
 
-#define MAX_FILE_SIZE_MB    2       // Max file size in megabytes
-#define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 1024 * 1024)  // Max file size in bytes
+volatile bool is_recording = true;
+volatile bool stop_recording = false;  // Flag to stop recording
 
-#define MAX_PATH_LENGTH 255
+SemaphoreHandle_t bufferReadySemaphore;
+SemaphoreHandle_t bufferEmptySemaphore;
+
+SemaphoreHandle_t sdCardSemaphore;
+SemaphoreHandle_t sdWriteSemaphore;
+SemaphoreHandle_t startCaptureSemaphore;
 
 
 float calculate_short_time_energy(int16_t *samples, size_t num_samples) {
@@ -82,7 +69,7 @@ void open_new_file() {
     current_file_size = 0;
 
     // Write the WAV header
-    wav_header_t wav_header = WAV_HEADER_PCM_DEFAULT(MAX_FILE_SIZE, 16, CONFIG_EXAMPLE_SAMPLE_RATE, 1);
+    wav_header_t wav_header = WAV_HEADER_PCM_DEFAULT(MAX_FILE_SIZE, 16, SAMPLE_RATE, 1);
     fwrite(&wav_header, sizeof(wav_header), 1, current_file);
 }
 
@@ -103,7 +90,9 @@ void capture_audio_task(void *param) {
             esp_err_t result = i2s_channel_read(*rx_handle, (char *)write_ptr, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 1000);
             if (result == ESP_OK && bytes_read == BUFFER_SIZE * sizeof(int16_t)) {
                 ESP_LOGE(TAG, "reading audio from buffer is okay.");
+
                 write_index = (write_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;  // Update write index
+                scale_audio_samples(write_ptr, BUFFER_SIZE, VOLUME_GAIN);
 
                 // Signal the write task that new data is available
                 xSemaphoreGive(bufferReadySemaphore);
@@ -200,8 +189,6 @@ void wait_audio_to_record(void) {
 
 void app_main(void)
 {
-    printf("PDM microphone recording example start\n--------------------------------------\n");
-
     // Initialize the SD card
     if (sd_card_init() != ESP_OK) {
         printf("Failed to initialize SD card\n");
