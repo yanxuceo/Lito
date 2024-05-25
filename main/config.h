@@ -3,12 +3,12 @@
 
 
 // Circular Buffer 
-#define BUFFER_SIZE     4096           // Size of each segment in the circular buffer
-#define NUM_SEGMENTS    20             // Number of segments in the circular buffer
+#define BUFFER_SIZE         4096           // Size of each segment in the circular buffer
+#define NUM_SEGMENTS        20             // Number of segments in the circular buffer
 #define TOTAL_BUFFER_SIZE (BUFFER_SIZE * NUM_SEGMENTS)
 
 #define FILE_EXTENSION      ".wav"
-#define ENERGY_THRESHOLD    (0.5)       // Adjust this value based on your microphone sensitivity
+#define ENERGY_THRESHOLD    (0.5)          // Adjust this value based on your microphone sensitivity
 
 
 // FILE limits

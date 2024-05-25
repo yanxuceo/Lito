@@ -2,6 +2,11 @@
 #include "wifi.h"
 
 
+static esp_err_t list_files_handler(httpd_req_t *req);
+static esp_err_t download_file_handler(httpd_req_t *req);
+static esp_err_t sync_time_handler(httpd_req_t *req);
+
+
 static const char *TAG = "wifi";
 
 // WiFi credentials
@@ -61,6 +66,36 @@ static esp_err_t download_file_handler(httpd_req_t *req) {
 }
 
 
+static esp_err_t sync_time_handler(httpd_req_t *req) {
+    char content[100];
+    int ret;
+
+    // Read the request content
+    if ((ret = httpd_req_recv(req, content, sizeof(content))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    // Parse the received time (expected in ISO 8601 format)
+    struct tm tm;
+    if (strptime(content, "%Y-%m-%dT%H:%M:%S", &tm) == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid time format");
+        return ESP_FAIL;
+    }
+
+    // Convert to time_t and set the system time
+    time_t t = mktime(&tm);
+    struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+
+    httpd_resp_sendstr(req, "Time synchronized");
+    return ESP_OK;
+}
+
+
 httpd_uri_t list_files = {
     .uri       = "/list",
     .method    = HTTP_GET,
@@ -73,6 +108,15 @@ httpd_uri_t download_file = {
     .uri       = "/download/*",
     .method    = HTTP_GET,
     .handler   = download_file_handler,
+    .user_ctx  = NULL
+};
+
+
+// URI handler structure
+httpd_uri_t sync_time = {
+    .uri       = "/sync_time",
+    .method    = HTTP_POST,
+    .handler   = sync_time_handler,
     .user_ctx  = NULL
 };
 
@@ -117,6 +161,7 @@ void start_http_server(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_register_uri_handler(server, &list_files);
         httpd_register_uri_handler(server, &download_file);
+        httpd_register_uri_handler(server, &sync_time); 
     }
 
     ESP_LOGI(TAG, "HTTP server started");
