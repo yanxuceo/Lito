@@ -5,7 +5,6 @@
 #include "format_wav.h"
 
 
-
 // do not change for best
 #define SAMPLE_RATE     16000U
 #define SAMPLE_BITS     16

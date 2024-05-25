@@ -10,18 +10,16 @@
 #define FILE_EXTENSION      ".wav"
 #define ENERGY_THRESHOLD    (0.5)       // Adjust this value based on your microphone sensitivity
 
-// STATUS LED GPIO 
-#define BUILTIN_LED GPIO_NUM_21
-
 
 // FILE limits
 #define MAX_PATH_LENGTH     128
-#define MAX_FILE_SIZE_MB    1                                 // Max file size in megabytes
+#define MAX_FILE_SIZE_MB    2                                   // Max file size in megabytes
 
-//TODO: 2024.05.24 revert it
-#define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 512 * 512)   // Max file size in bytes
+// TODO: 2024.05.24 revert it
+#define MAX_FILE_SIZE       (MAX_FILE_SIZE_MB * 1024 * 1024)    // Max file size in bytes
 
 
+// Audio file directory
 #define AUDIO_DIR "/0524"
 
 

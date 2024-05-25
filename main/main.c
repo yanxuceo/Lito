@@ -9,10 +9,15 @@
 #include "freertos/semphr.h"
 
 #include "sd_card.h"
-#include "esp_log.h"
 #include "i2s_mic.h"
 
 #include "config.h"
+#include "gpio.h"
+#include "wifi.h"
+#include "util.h"
+
+#include "esp_log.h"
+
 
 static const char *TAG = "app";
 
@@ -35,35 +40,16 @@ SemaphoreHandle_t bufferEmptySemaphore;
 SemaphoreHandle_t sdCardSemaphore;
 SemaphoreHandle_t sdWriteSemaphore;
 SemaphoreHandle_t startCaptureSemaphore;
+      
+// WiFi task
+void handleWiFiRequests(void *param) {
+    start_wifi();
+    start_http_server();
 
-
-
-float calculate_short_time_energy(int16_t *samples, size_t num_samples) {
-    if (num_samples == 0) return -INFINITY;  // Avoid division by zero and log(0)
-
-    float energy = 0.0f;
-    int16_t max_amplitude = 0;
-
-    // Find the maximum amplitude to use for normalization
-    for (size_t i = 0; i < num_samples; ++i) {
-        if (abs(samples[i]) > max_amplitude) {
-            max_amplitude = abs(samples[i]);
-        }
+    while (1) {
+        vTaskDelay(1 / portTICK_PERIOD_MS);
     }
-
-    // Calculate energy, normalized by the maximum amplitude
-    for (size_t i = 0; i < num_samples; ++i) {
-        float normalized_sample = (max_amplitude != 0) ? (samples[i] / (float)max_amplitude) : 0;
-        energy += normalized_sample * normalized_sample;
-    }
-
-    float rms = sqrt(energy / num_samples);
-
-    // Convert RMS to decibels (dB)
-    float db = 20.0 * log10(rms + 1e-6); // Adding a small value to avoid log(0)
-    return -db;
 }
-
 
 // TODO: AUDIO_DIR should be named with current date 
 void open_new_file() {
@@ -208,6 +194,26 @@ void write_to_sd_task(void *param) {
 }
 
 
+void gpio_task(void *param) {
+    while (1) {
+        // Read the button status
+        int button_status = gpio_get_level(GPIO_INPUT_PIN_RECORDER_CONTROL);
+
+        // Control the LED based on button status
+        if (button_status == 1) {
+            // Turn on LED
+            //gpio_set_level(GPIO_ON_BOARD_STATUS_LED, 1);
+        } else {
+            // Turn off LED
+            //gpio_set_level(GPIO_ON_BOARD_STATUS_LED, 0);
+        }
+
+        // Add a small delay to debounce
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
+}
+
+
 void wait_sd_init(void) {
     xSemaphoreGive(sdWriteSemaphore);
 }
@@ -226,7 +232,19 @@ void app_main(void)
         return;
     }
 
+    // Initialized i2s for micphone
     init_microphone(&rx_handle);
+
+    // Initialized GPIO INPUT/OUTPUT
+    gpio_init();
+
+    // Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
     
     // Create semaphores for buffer synchronization
     bufferReadySemaphore = xSemaphoreCreateBinary();
@@ -234,21 +252,22 @@ void app_main(void)
     sdWriteSemaphore = xSemaphoreCreateBinary();
     startCaptureSemaphore = xSemaphoreCreateBinary();
 
-    
     // Initialize the recording flag
     is_recording = true;
     
     // Create tasks for capturing audio and writing to SD card
     xTaskCreate(capture_audio_task, "capture_audio_task", 4096, &rx_handle, 2, NULL);  // Highest priority
     xTaskCreate(write_to_sd_task, "write_to_sd_task", 4096, NULL, 1, NULL);            // Lower priority
+    
+    // Create task for monitoring GPIO and controlling LED
+    xTaskCreate(gpio_task, "gpio_task", 4096, NULL, 1, NULL);                          // Set appropriate priority
+
+    // Create task for handling WiFi requests
+    xTaskCreate(handleWiFiRequests, "handleWiFiRequests", 4096, NULL, 1, NULL);
 
 
     // Simulate triggering SD card write after some delay
     vTaskDelay(5000 / portTICK_PERIOD_MS);
     wait_sd_init();
     wait_audio_to_record();
-
-    // Optionally blink LED to indicate recording has started
-    gpio_set_direction(BUILTIN_LED, GPIO_MODE_OUTPUT);
-    gpio_set_level(BUILTIN_LED, 1);
 }
