@@ -18,7 +18,6 @@
 
 #include "esp_log.h"
 
-
 static const char *TAG = "app";
 
 static int16_t circular_buffer[TOTAL_BUFFER_SIZE];
@@ -31,16 +30,14 @@ i2s_chan_handle_t rx_handle = NULL;
 static FILE *current_file = NULL;
 static size_t current_file_size = 0;
 
-volatile bool is_recording = true;
-volatile bool stop_recording = false;  // Flag to stop recording
+volatile bool is_capturing = true;
+volatile bool stop_recording = false;               // Flag to stop recording
+
 
 SemaphoreHandle_t bufferReadySemaphore;
 SemaphoreHandle_t bufferEmptySemaphore;
 
-SemaphoreHandle_t sdCardSemaphore;
-SemaphoreHandle_t sdWriteSemaphore;
-SemaphoreHandle_t startCaptureSemaphore;
-      
+
 // WiFi task
 void handleWiFiRequests(void *param) {
     start_wifi();
@@ -50,6 +47,7 @@ void handleWiFiRequests(void *param) {
         vTaskDelay(1 / portTICK_PERIOD_MS);
     }
 }
+
 
 // TODO: AUDIO_DIR should be named with current date 
 void open_new_file() {
@@ -92,137 +90,114 @@ void open_new_file() {
 }
 
 
-void capture_audio_task(void *param) {
+void capture_audio_task(void *param) 
+{
     i2s_chan_handle_t *rx_handle = (i2s_chan_handle_t *)param;
     size_t bytes_read;
 
-    if (xSemaphoreTake(startCaptureSemaphore, portMAX_DELAY) == pdTRUE) {
+    while (is_capturing) {
+        int16_t *write_ptr = &circular_buffer[write_index];
 
-        while (is_recording) {
-            int16_t *write_ptr = &circular_buffer[write_index];
-
-            // Wait for space to be available in the buffer
-            xSemaphoreTake(bufferEmptySemaphore, portMAX_DELAY);
-
-            // Read audio data into the circular buffer
-            esp_err_t result = i2s_channel_read(*rx_handle, (char *)write_ptr, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 1000);
-            if (result == ESP_OK && bytes_read == BUFFER_SIZE * sizeof(int16_t)) {
-                ESP_LOGE(TAG, "reading audio from buffer is okay.");
-
-                write_index = (write_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;  // Update write index
-                scale_audio_samples(write_ptr, BUFFER_SIZE, VOLUME_GAIN);
-
-                // Signal the write task that new data is available
-                xSemaphoreGive(bufferReadySemaphore);
-
-                // Check if the buffer is full
-                if (write_index == read_index) {
-                    ESP_LOGE(TAG, "Buffer overflow! Write index has caught up to read index.");
-                    is_recording = false;  // Stop recording
-                    break;  // Exit the loop
-                }
-            } else {
-                ESP_LOGE(TAG, "Failed to read data from I2S or incomplete read");
-            }
-
-            vTaskDelay(1 / portTICK_PERIOD_MS);  // Yield to other tasks
+        // Wait for space to be available in the buffer
+        if (xSemaphoreTake(bufferEmptySemaphore, portMAX_DELAY) == pdFALSE) {
+            break;  // Exit if semaphore is not given
         }
 
-        // Signal to stop the write task
-        stop_recording = true;
+        // Read audio data into the circular buffer
+        esp_err_t result = i2s_channel_read(*rx_handle, (char *)write_ptr, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 1000);
+        if (result == ESP_OK && bytes_read == BUFFER_SIZE * sizeof(int16_t)) {
+            ESP_LOGI(TAG, "Reading audio from buffer is okay.");
 
-        // Disable the I2S channel when stopping
-        i2s_channel_disable(*rx_handle);
+            write_index = (write_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;  // Update write index
+            scale_audio_samples(write_ptr, BUFFER_SIZE, VOLUME_GAIN);
+
+            // Signal the write task that new data is available
+            xSemaphoreGive(bufferReadySemaphore);
+
+            // Check if the buffer is full
+            if (write_index == read_index) {
+                ESP_LOGE(TAG, "Buffer overflow! Write index has caught up to read index.");
+                break;  // Stop recording due to overflow
+            }
+        } else {
+            ESP_LOGE(TAG, "Failed to read data from I2S or incomplete read");
+        }
     }
 
-    // To prevent the task from returning, enter an infinite loop
-    while (1) {
-        vTaskDelay(portMAX_DELAY);  // Block forever
-    }
+    // Disable the I2S channel when stopping
+    i2s_channel_disable(*rx_handle);
+    ESP_LOGI(TAG, "Audio capture task deactivated.");
+    vTaskDelete(NULL);  // Delete the task
 }
 
 
 void write_to_sd_task(void *param) {
-    if (xSemaphoreTake(sdWriteSemaphore, portMAX_DELAY) == pdTRUE) {
-        open_new_file();  // Open the initial file
+    open_new_file();    // Open the initial file
 
-        while (!stop_recording) {
-            // Wait for data to be available in the buffer
-            xSemaphoreTake(bufferReadySemaphore, portMAX_DELAY);
+    while (is_capturing) {
+        // Wait for data to be available in the buffer
+        if (xSemaphoreTake(bufferReadySemaphore, portMAX_DELAY) == pdFALSE) {
+            break;      // Exit if semaphore is not given
+        }
 
-            if (write_index != read_index) {
-                int16_t *read_ptr = &circular_buffer[read_index];
+        if (write_index != read_index) {
+            int16_t *read_ptr = &circular_buffer[read_index];
 
-                // Calculate energy of the buffer segment
-                float energy = calculate_short_time_energy(read_ptr, BUFFER_SIZE);
-                ESP_LOGI(TAG, "Calculated energy: %f", energy);
+            // Calculate energy of the buffer segment
+            float energy = calculate_short_time_energy(read_ptr, BUFFER_SIZE);
+            ESP_LOGI(TAG, "Calculated energy: %f", energy);
 
-                // silence detection and skip saving
-                if (energy >= ENERGY_THRESHOLD) {
-                    fwrite(read_ptr, sizeof(int16_t), BUFFER_SIZE, current_file);
-                
-                    current_file_size += BUFFER_SIZE * sizeof(int16_t);
-                    ESP_LOGI(TAG, "Written %d bytes to file", current_file_size);
-                }
-
-                if (current_file_size >= MAX_FILE_SIZE) {
-                    ESP_LOGI(TAG, "Closing file 1");
-                    open_new_file();
-                }
-
-                // Update read index after writing
-                read_index = (read_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;
-
-                // Signal the capture task that space is available in the buffer
-                xSemaphoreGive(bufferEmptySemaphore);
+            // silence detection and skip saving
+            if (energy >= ENERGY_THRESHOLD) {
+                fwrite(read_ptr, sizeof(int16_t), BUFFER_SIZE, current_file);
+            
+                current_file_size += BUFFER_SIZE * sizeof(int16_t);
+                ESP_LOGI(TAG, "Written %d bytes to file", current_file_size);
             }
 
-            //vTaskDelay(1 / portTICK_PERIOD_MS);  // Yield to other tasks
-        }
+            if (current_file_size >= MAX_FILE_SIZE) {
+                ESP_LOGI(TAG, "Closing file 1");
+                open_new_file();
+            }
 
-        // Close the file when done
-        if (current_file != NULL) {
-            ESP_LOGI(TAG, "Closing file 2");
-            fclose(current_file);
+            // Update read index after writing
+            read_index = (read_index + BUFFER_SIZE) % TOTAL_BUFFER_SIZE;
+
+            // Signal the capture task that space is available in the buffer
+            xSemaphoreGive(bufferEmptySemaphore);
         }
     }
 
-    // To prevent the task from returning, enter an infinite loop
-    while (1) {
-        vTaskDelay(portMAX_DELAY);  // Block forever
+    // Close the file when done
+    if (current_file != NULL) {
+        fclose(current_file);
+        current_file = NULL;
     }
+    ESP_LOGI(TAG, "SD writing task completed.");
+    vTaskDelete(NULL);  // Delete the task
 }
 
 
 void gpio_task(void *param) {
     while (1) {
-        // Read the button status
-        int button_status = gpio_get_level(GPIO_INPUT_PIN_RECORDER_CONTROL);
+        bool button_status = gpio_get_level(GPIO_INPUT_PIN_RECORDER_CONTROL);
 
-        // Control the LED based on button status
-        if (button_status == 1) {
-            // Turn on LED
-            //gpio_set_level(GPIO_ON_BOARD_STATUS_LED, 1);
-        } else {
-            // Turn off LED
-            //gpio_set_level(GPIO_ON_BOARD_STATUS_LED, 0);
+        if (button_status && !is_capturing) {
+            ESP_LOGI(TAG, "Switched on, start recording....");
+
+            is_capturing = true;
+            i2s_channel_enable(rx_handle);
+
+            xTaskCreate(capture_audio_task, "capture_audio_task", 4096, &rx_handle, 2, NULL);
+            xTaskCreate(write_to_sd_task, "write_to_sd_task", 4096, NULL, 1, NULL);
+        } else if (!button_status && is_capturing) {
+            ESP_LOGI(TAG, "Switched off, strop recording....");
+            is_capturing = false; 
         }
 
-        // Add a small delay to debounce
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskDelay(50 / portTICK_PERIOD_MS);  // Debounce delay
     }
 }
-
-
-void wait_sd_init(void) {
-    xSemaphoreGive(sdWriteSemaphore);
-}
-
-
-void wait_audio_to_record(void) {
-    xSemaphoreGive(startCaptureSemaphore);
-}
-
 
 void app_main(void)
 {
@@ -235,6 +210,9 @@ void app_main(void)
     // Initialized i2s for micphone
     init_microphone(&rx_handle);
 
+    // Simulate triggering SD card write after some delay
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+   
     // Initialized GPIO INPUT/OUTPUT
     gpio_init();
 
@@ -248,26 +226,15 @@ void app_main(void)
     
     // Create semaphores for buffer synchronization
     bufferReadySemaphore = xSemaphoreCreateBinary();
-    bufferEmptySemaphore = xSemaphoreCreateCounting(NUM_SEGMENTS, NUM_SEGMENTS);  // Initialize as available
-    sdWriteSemaphore = xSemaphoreCreateBinary();
-    startCaptureSemaphore = xSemaphoreCreateBinary();
-
-    // Initialize the recording flag
-    is_recording = true;
+    bufferEmptySemaphore = xSemaphoreCreateCounting(NUM_SEGMENTS, NUM_SEGMENTS);       // Initialize as available
     
     // Create tasks for capturing audio and writing to SD card
-    xTaskCreate(capture_audio_task, "capture_audio_task", 4096, &rx_handle, 2, NULL);  // Highest priority
-    xTaskCreate(write_to_sd_task, "write_to_sd_task", 4096, NULL, 1, NULL);            // Lower priority
+    xTaskCreate(capture_audio_task, "capture_audio_task", 4096, &rx_handle, 2, NULL);  
+    xTaskCreate(write_to_sd_task, "write_to_sd_task", 4096, NULL, 1, NULL);            
     
     // Create task for monitoring GPIO and controlling LED
-    xTaskCreate(gpio_task, "gpio_task", 4096, NULL, 1, NULL);                          // Set appropriate priority
+    xTaskCreate(gpio_task, "gpio_task", 4096, NULL, 1, NULL);                         
 
     // Create task for handling WiFi requests
     xTaskCreate(handleWiFiRequests, "handleWiFiRequests", 4096, NULL, 1, NULL);
-
-
-    // Simulate triggering SD card write after some delay
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
-    wait_sd_init();
-    wait_audio_to_record();
 }
